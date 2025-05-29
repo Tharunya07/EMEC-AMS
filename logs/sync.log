@@ -19,3 +19,39 @@
 2025-05-29 22:58:01,971 [INFO] [CRON] Azure sync job started
 2025-05-29 22:58:02,325 [INFO] [SYNC] No unsynced logs to push
 2025-05-29 22:58:02,328 [INFO] [CRON] Sync to Azure completed successfully.
+2025-05-29 22:59:01,648 [INFO] [CRON] Azure sync job started
+2025-05-29 22:59:02,004 [INFO] [SYNC] No unsynced logs to push
+2025-05-29 22:59:02,005 [INFO] [CRON] Sync to Azure completed successfully.
+2025-05-29 23:00:01,399 [INFO] [CRON] Azure sync job started
+2025-05-29 23:00:01,733 [INFO] [SYNC] No unsynced logs to push
+2025-05-29 23:00:01,733 [INFO] [CRON] Sync to Azure completed successfully.
+2025-05-29 23:01:02,101 [INFO] [CRON] Azure sync job started
+2025-05-29 23:01:02,430 [INFO] [SYNC] No unsynced logs to push
+2025-05-29 23:01:02,431 [INFO] [CRON] Sync to Azure completed successfully.
+2025-05-29 23:02:01,821 [INFO] [CRON] Azure sync job started
+2025-05-29 23:02:02,189 [INFO] [SYNC] No unsynced logs to push
+2025-05-29 23:02:02,191 [INFO] [CRON] Sync to Azure completed successfully.
+2025-05-29 23:03:01,568 [INFO] [CRON] Azure sync job started
+2025-05-29 23:03:01,945 [INFO] [SYNC] No unsynced logs to push
+2025-05-29 23:03:01,947 [INFO] [CRON] Sync to Azure completed successfully.
+2025-05-29 23:04:01,258 [INFO] [CRON] Azure sync job started
+2025-05-29 23:04:01,599 [INFO] [SYNC] No unsynced logs to push
+2025-05-29 23:04:01,599 [INFO] [CRON] Sync to Azure completed successfully.
+2025-05-29 23:05:01,959 [INFO] [CRON] Azure sync job started
+2025-05-29 23:05:02,368 [INFO] [SYNC] No unsynced logs to push
+2025-05-29 23:05:02,369 [INFO] [CRON] Sync to Azure completed successfully.
+2025-05-29 23:06:01,704 [INFO] [CRON] Azure sync job started
+2025-05-29 23:06:02,024 [INFO] [SYNC] No unsynced logs to push
+2025-05-29 23:06:02,024 [INFO] [CRON] Sync to Azure completed successfully.
+2025-05-29 23:07:01,286 [INFO] [CRON] Azure sync job started
+2025-05-29 23:07:01,612 [INFO] [SYNC] No unsynced logs to push
+2025-05-29 23:07:01,612 [INFO] [CRON] Sync to Azure completed successfully.
+2025-05-29 23:08:01,931 [INFO] [CRON] Azure sync job started
+2025-05-29 23:08:02,246 [INFO] [SYNC] No unsynced logs to push
+2025-05-29 23:08:02,246 [INFO] [CRON] Sync to Azure completed successfully.
+2025-05-29 23:09:01,722 [INFO] [CRON] Azure sync job started
+2025-05-29 23:09:02,149 [INFO] [SYNC] No unsynced logs to push
+2025-05-29 23:09:02,151 [INFO] [CRON] Sync to Azure completed successfully.
+2025-05-29 23:10:01,668 [INFO] [CRON] Azure sync job started
+2025-05-29 23:10:02,100 [INFO] [SYNC] No unsynced logs to push
+2025-05-29 23:10:02,103 [INFO] [CRON] Sync to Azure completed successfully.
