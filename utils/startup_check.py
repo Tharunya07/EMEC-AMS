@@ -1,70 +1,74 @@
 # utils/startup_check.py
 
-import socket
+import os
 import time
-import urllib.request
+import socket
 from lcd.lcd import LCD
-import db.local_db as local_db
-from db.azure_sync import AzureConnection
-from config.constants import *
+from config.constants import (
+    LCD_MESSAGES,
+    STATUS_MAINTENANCE,
+    MACHINE_ID,
+    DEVICE_ID
+)
+from db.local_db import LocalDB
+from db.azure_sync import sync_local_from_azure, push_machine_status
+import logging
 
-class StartupCheck:
-    def __init__(self, lcd: LCD, azure: AzureConnection, machine_id: str):
-        self.lcd = lcd
-        self.azure = azure
-        self.machine_id = machine_id
-        self.device_id = self.get_cpu_serial()
+logger = logging.getLogger("startup")
+log_file = logging.FileHandler("logs/sync.log")
+logger.setLevel(logging.INFO)
+logger.addHandler(log_file)
 
-    def get_cpu_serial(self):
-        try:
-            with open('/proc/cpuinfo', 'r') as f:
-                for line in f:
-                    if line.startswith('Serial'):
-                        return line.split(":")[1].strip()
-        except Exception:
-            return "0000000000000000"
+def check_internet():
+    try:
+        return socket.gethostbyname("google.com")
+    except:
+        return False
 
-    def check_internet(self):
-        try:
-            urllib.request.urlopen("https://www.google.com", timeout=3)
-            print("[StartupCheck] Internet OK.")
-            return True
-        except OSError as e:
-            print(f"[StartupCheck] Internet failed: {e}")
-            return False
+def startup_sequence():
+    lcd = LCD()
+    db = LocalDB()
 
-    def update_machine_status_and_heartbeat(self):
-        machine = self.azure.get_machine(self.machine_id)
-        if not machine:
-            raise Exception("Machine not found in Azure")
+    logger.info("[STEP] Starting system checks...")
 
-        if machine['machine_status'] == STATUS_MAINTENANCE:
-            self.lcd.show_message("\n".join(LCD_MESSAGES["maintenance"]))
-            return False
+    if not check_internet():
+        lcd.show_message("\n".join(LCD_MESSAGES["internet_error"]))
+        logger.error("[FAIL] No Internet")
+        return False
 
-        if machine['machine_status'] == STATUS_OFFLINE:
-            self.azure.update_machine_status(self.machine_id, STATUS_NEUTRAL)
+    logger.info("[PASS] Internet check passed.")
 
-        self.azure.update_machine_heartbeat(self.machine_id, self.device_id)
-        return True
+    try:
+        lcd.display(1, "Syncing with Azure")
+        sync_local_from_azure()
+        logger.info("[PASS] Azure sync complete.")
+    except Exception as e:
+        lcd.show_message("\n".join(LCD_MESSAGES["azure_error"]))
+        logger.error(f"[ERROR] Azure sync failed: {e}")
+        return False
 
-    def run(self):
-        if not self.check_internet():
-            self.lcd.show_message("\n".join(LCD_MESSAGES["internet_error"]))
-            raise Exception("Internet connection failed")
+    machine = db.get_machine(MACHINE_ID)
+    if not machine:
+        lcd.display(1, f"Machine {MACHINE_ID}")
+        lcd.display(2, "not registered")
+        db.insert_machine_if_missing(MACHINE_ID)
+        logger.warning(f"[WARN] Machine {MACHINE_ID} not found. Inserting default.")
 
-        if not self.azure.test_connection():
-            self.lcd.show_message("\n".join(LCD_MESSAGES["azure_error"]))
-            raise Exception("Azure DB connection failed")
+    machine = db.get_machine(MACHINE_ID)
+    if machine["machine_status"] == STATUS_MAINTENANCE:
+        lcd.show_message("\n".join(LCD_MESSAGES["maintenance"]))
+        logger.warning("[HALT] Machine in maintenance mode.")
+        return False
 
-        # ? Create tables in local.db
-        local_db.initialize_local_db()
+    db.update_machine_status(MACHINE_ID, "neutral")
+    logger.info("[PASS] Machine status set to neutral.")
 
-        if not self.azure.sync_to_local(local_db):
-            self.lcd.show_message("\n".join(LCD_MESSAGES["sync_error"]))
-            raise Exception("Azure ? Local sync failed")
+    db.update_machine_device(MACHINE_ID, DEVICE_ID)
+    db.update_machine_heartbeat(MACHINE_ID)
+    logger.info("[PASS] Device ID + Heartbeat updated.")
 
-        if not self.update_machine_status_and_heartbeat():
-            return False
+    push_machine_status(MACHINE_ID)
 
-        return True
+    lcd.show_message("\n".join(LCD_MESSAGES["start"]))
+    time.sleep(2)
+    return True

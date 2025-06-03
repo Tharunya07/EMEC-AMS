@@ -1,304 +1,107 @@
+# db/local_db.py
+
 import sqlite3
-import logging
-from dateutil import parser
-from datetime import datetime
+import time
+from config.constants import LOCAL_DB_PATH
 
-DB_PATH = "/home/tharunya/emec-ams/local.db"
+class LocalDB:
+    def __init__(self):
+        self.conn = sqlite3.connect(LOCAL_DB_PATH)
+        self.conn.row_factory = sqlite3.Row
+        self.cursor = self.conn.cursor()
 
-logging.basicConfig(
-    filename="/home/tharunya/emec-ams/logs/sync.log",
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
+    def get_machine(self, machine_id):
+        self.cursor.execute("SELECT * FROM machine WHERE machine_id = ?", (machine_id,))
+        return self.cursor.fetchone()
 
-def get_connection():
-    return sqlite3.connect(DB_PATH)
+    def insert_machine_if_missing(self, machine_id):
+        self.cursor.execute("SELECT * FROM machine WHERE machine_id = ?", (machine_id,))
+        if not self.cursor.fetchone():
+            self.cursor.execute("""
+                INSERT INTO machine (machine_id, machine_name, machine_type, machine_status)
+                VALUES (?, ?, ?, 'neutral')
+            """, (machine_id, machine_id.upper(), "generic"))
+            self.conn.commit()
 
-def initialize_local_db():
-    conn = get_connection()
-    c = conn.cursor()
+    def update_machine_status(self, machine_id, status):
+        self.cursor.execute("UPDATE machine SET machine_status = ? WHERE machine_id = ?", (status, machine_id))
+        self.conn.commit()
 
-    # Users table
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS Users (
-            uid TEXT PRIMARY KEY,
-            csu_id TEXT,
-            name TEXT,
-            access_level TEXT,
-            last_used TEXT,
-            is_active INTEGER DEFAULT 0,
-            group_name TEXT
+    def update_machine_device(self, machine_id, device_id):
+        self.cursor.execute("UPDATE machine SET device_id = ? WHERE machine_id = ?", (device_id, machine_id))
+        self.conn.commit()
+
+    def update_machine_heartbeat(self, machine_id):
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
+        self.cursor.execute("UPDATE machine SET last_heartbeat = ? WHERE machine_id = ?", (now, machine_id))
+        self.conn.commit()
+
+    def get_setting(self, key, default=None):
+        self.cursor.execute("SELECT value FROM system_settings WHERE key = ?", (key,))
+        row = self.cursor.fetchone()
+        return int(row[0]) if row else default
+
+    def get_user(self, csu_id):
+        self.cursor.execute("SELECT * FROM users WHERE csu_id = ?", (csu_id,))
+        return self.cursor.fetchone()
+
+    def has_permission(self, csu_id, machine_id):
+        self.cursor.execute(
+            "SELECT * FROM machine_permissions WHERE csu_id = ? AND machine_id = ?",
+            (csu_id, machine_id)
         )
-    """)
+        return self.cursor.fetchone() is not None
 
-    # Machine table
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS Machine (
-            machine_id TEXT PRIMARY KEY,
-            machine_type TEXT,
-            machine_name TEXT,
-            machine_status TEXT DEFAULT 'offline',
-            device_id TEXT,
-            last_heartbeat TEXT
+    def access_request_exists(self, csu_id, machine_id):
+        self.cursor.execute(
+            "SELECT * FROM access_requests WHERE csu_id = ? AND machine_id = ?",
+            (csu_id, machine_id)
         )
-    """)
+        return self.cursor.fetchone() is not None
 
-    # Machine_Permissions table
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS Machine_Permissions (
-            csu_id TEXT,
-            machine_id TEXT,
-            machine_type TEXT,
-            access TEXT NOT NULL,
-            granted_by TEXT,
-            granted_at TEXT,
-            PRIMARY KEY (csu_id, machine_id)
+    def insert_access_request(self, csu_id, machine_id):
+        self.cursor.execute("SELECT uid FROM users WHERE csu_id = ?", (csu_id,))
+        user = self.cursor.fetchone()
+        uid = user["uid"] if user else None
+
+        self.cursor.execute("SELECT machine_type FROM machine WHERE machine_id = ?", (machine_id,))
+        machine = self.cursor.fetchone()
+        machine_type = machine["machine_type"] if machine else None
+
+        self.cursor.execute("""
+            INSERT INTO access_requests (
+            uid, csu_id, machine_id, machine_type,
+            status, requested_on
+        ) VALUES (?, ?, ?, ?, 'under_review', datetime('now'))
+        """, (uid, csu_id, machine_id, machine_type))
+        self.conn.commit()
+
+    def mark_user_active(self, csu_id):
+        self.cursor.execute("UPDATE users SET is_active = 1, last_used = datetime('now') WHERE csu_id = ?", (csu_id,))
+        self.conn.commit()
+
+    def mark_user_inactive(self, csu_id):
+        self.cursor.execute("UPDATE users SET is_active = 0 WHERE csu_id = ?", (csu_id,))
+        self.conn.commit()
+
+    def insert_session(self, session_id, csu_id, machine_id):
+        self.cursor.execute("SELECT machine_type FROM machine WHERE machine_id = ?", (machine_id,))
+        result = self.cursor.fetchone()
+        machine_type = result["machine_type"] if result and result["machine_type"] else "Unknown"
+
+        self.cursor.execute(
+            "INSERT INTO machine_usage (session_id, csu_id, machine_id, machine_type, start_time) VALUES (?, ?, ?, ?, datetime('now'))",
+            (session_id, csu_id, machine_id, machine_type)
         )
-    """)
+        self.conn.commit()
 
-    # Access_Requests table
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS Access_Requests (
-            request_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            uid TEXT,
-            machine_id TEXT,
-            machine_type TEXT,
-            requested_on TEXT DEFAULT CURRENT_TIMESTAMP,
-            status TEXT DEFAULT 'under_review',
-            reviewed_by TEXT,
-            reviewed_at TEXT
+    def end_session(self, session_id):
+        self.cursor.execute(
+            "UPDATE machine_usage SET end_time = datetime('now'), duration = ((strftime('%s','now') - strftime('%s', start_time)) / 60) WHERE session_id = ?",
+            (session_id,)
         )
-    """)
+        self.conn.commit()
 
-    # Machine_Usage table
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS Machine_Usage (
-            log_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT,
-            csu_id TEXT,
-            machine_id TEXT,
-            machine_type TEXT,
-            start_time TEXT,
-            end_time TEXT,
-            duration INTEGER
-        )
-    """)
+    def close(self):
+        self.conn.close()
 
-    # system_settings table
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS system_settings (
-            key TEXT PRIMARY KEY,
-            value TEXT,
-            description TEXT
-        )
-    """)
-
-    # azure_synced tracker
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS azure_synced (
-            session_id TEXT PRIMARY KEY
-        )
-    """)
-
-    conn.commit()
-    conn.close()
-    logging.info("All local.db tables initialized.")
-
-def replace_table(table_name, rows):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute(f"DELETE FROM {table_name}")
-    if not rows:
-        conn.commit()
-        conn.close()
-        return
-    columns = rows[0].keys()
-    col_list = ', '.join(columns)
-    placeholders = ', '.join(['?'] * len(columns))
-    insert_sql = f"INSERT INTO {table_name} ({col_list}) VALUES ({placeholders})"
-    for row in rows:
-        values = tuple(row[col] for col in columns)
-        c.execute(insert_sql, values)
-    conn.commit()
-    conn.close()
-
-def get_users_with_updates():
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT csu_id, is_active, last_used FROM Users WHERE last_used IS NOT NULL")
-    rows = [{"csu_id": r[0], "is_active": r[1], "last_used": r[2]} for r in c.fetchall()]
-    conn.close()
-    return rows
-
-def get_machines_with_updates():
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT machine_id, machine_status, last_heartbeat FROM Machine WHERE last_heartbeat IS NOT NULL")
-    rows = [{"machine_id": r[0], "machine_status": r[1], "last_heartbeat": r[2]} for r in c.fetchall()]
-    conn.close()
-    return rows
-
-def get_unsynced_usage_logs():
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("""
-        SELECT session_id, csu_id, machine_id, machine_type, start_time, end_time, duration
-        FROM Machine_Usage
-        WHERE session_id NOT IN (SELECT session_id FROM azure_synced)
-        AND end_time IS NOT NULL
-    """)
-    rows = [dict(zip([column[0] for column in c.description], row)) for row in c.fetchall()]
-    conn.close()
-    return rows
-
-def mark_usage_as_synced(session_id):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO azure_synced (session_id) VALUES (?)", (session_id,))
-    conn.commit()
-    conn.close()
-
-
-def get_user_by_uid(uid):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT csu_id, name FROM Users WHERE uid = ?", (uid,))
-    row = c.fetchone()
-    conn.close()
-    if row:
-        logging.info(f"User found: {row[1]} (CSU ID: {row[0]})")
-        return {"csu_id": row[0], "name": row[1]}
-    logging.warning(f"No user found with UID {uid}")
-    return None
-
-def get_user_name_by_uid(uid):
-    user = get_user_by_uid(uid)
-    return user['name'] if user else "Unknown"
-
-def check_permission(csu_id, machine_id):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT 1 FROM Machine_Permissions WHERE csu_id = ? AND machine_id = ?", (csu_id, machine_id))
-    result = c.fetchone()
-    conn.close()
-    return bool(result)
-
-def get_access_request(csu_id, machine_id):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("""
-        SELECT status FROM Access_Requests
-        WHERE uid IN (SELECT uid FROM Users WHERE csu_id = ?)
-        AND machine_id = ?
-        ORDER BY requested_on DESC LIMIT 1
-    """, (csu_id, machine_id))
-    row = c.fetchone()
-    conn.close()
-    return {"status": row[0]} if row else None
-
-def create_access_request(uid, csu_id, machine_id):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO Access_Requests (uid, machine_id, machine_type)
-        VALUES (?, ?, (SELECT machine_type FROM Machine WHERE machine_id = ?))
-    """, (uid, machine_id, machine_id))
-    conn.commit()
-    conn.close()
-    logging.info(f"Access request created for {csu_id}/{uid} on {machine_id}")
-
-def get_latest_session(csu_id, machine_id):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("""SELECT start_time, end_time FROM Machine_Usage 
-                 WHERE csu_id = ? AND machine_id = ?
-                 ORDER BY start_time DESC LIMIT 1""", (csu_id, machine_id))
-    row = c.fetchone()
-    conn.close()
-    if row:
-        end_time = parser.parse(row[1]) if row[1] else None
-        return {"start_time": row[0], "end_time": end_time}
-    return None
-
-def update_user_active(csu_id, is_active):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("UPDATE Users SET is_active = ? WHERE csu_id = ?", (int(is_active), csu_id))
-    conn.commit()
-    conn.close()
-    logging.info(f"Set is_active={is_active} for {csu_id}")
-
-def update_user_last_used(csu_id, timestamp):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("UPDATE Users SET last_used = ? WHERE csu_id = ?", (timestamp, csu_id))
-    conn.commit()
-    conn.close()
-    logging.info(f"Updated last_used for {csu_id} to {timestamp}")
-
-def update_machine_status(machine_id, status):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("UPDATE Machine SET machine_status = ? WHERE machine_id = ?", (status, machine_id))
-    conn.commit()
-    conn.close()
-    logging.info(f"Updated machine_status for {machine_id} to {status}")
-
-def update_machine_heartbeat(machine_id, timestamp):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("UPDATE Machine SET last_heartbeat = ? WHERE machine_id = ?", (timestamp, machine_id))
-    conn.commit()
-    conn.close()
-    logging.info(f"Updated heartbeat for {machine_id} to {timestamp}")
-
-def insert_machine_usage_log(session_id, csu_id, machine_id, start_time):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("""INSERT INTO Machine_Usage (session_id, csu_id, machine_id, machine_type, start_time)
-                 VALUES (?, ?, ?, 
-                 (SELECT machine_type FROM Machine WHERE machine_id = ?), ?)""",
-              (session_id, csu_id, machine_id, machine_id, start_time))
-    conn.commit()
-    conn.close()
-    logging.info(f"Started session {session_id} for {csu_id} on {machine_id}")
-
-def close_machine_usage_log(csu_id, machine_id, end_time):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("""SELECT log_id, start_time FROM Machine_Usage
-                 WHERE csu_id = ? AND machine_id = ? AND end_time IS NULL
-                 ORDER BY start_time DESC LIMIT 1""", (csu_id, machine_id))
-    row = c.fetchone()
-    if row:
-        log_id, start_time = row
-        start_dt = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
-        duration = int((end_time - start_dt).total_seconds() // 60)
-        c.execute("UPDATE Machine_Usage SET end_time = ?, duration = ? WHERE log_id = ?",
-                  (end_time.strftime("%Y-%m-%d %H:%M:%S"), duration, log_id))
-        conn.commit()
-        logging.info(f"Closed session {log_id} for {csu_id}, duration: {duration} mins")
-    conn.close()
-
-def is_machine_in_maintenance(machine_id):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT machine_status FROM Machine WHERE machine_id = ?", (machine_id,))
-    row = c.fetchone()
-    conn.close()
-    return row and row[0] == "maintenance"
-
-def get_grace_period():
-    conn = get_connection()
-    c = conn.cursor()
-    try:
-        c.execute("SELECT value FROM system_settings WHERE key = 'grace_period_seconds'")
-        row = c.fetchone()
-        return int(row[0]) if row else 10
-    except:
-        return 10
-    finally:
-        conn.close()
-
-def get_machine_id():
-    return "lathe-001"  

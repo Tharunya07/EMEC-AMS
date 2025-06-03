@@ -32,7 +32,16 @@ class LCD:
         self._write(0x01, LCD_CMD)
         time.sleep(E_DELAY)
 
-    def display(self, line, text):
+    # ? single-line message defaults to line 1
+    def display(self, *args):
+        if len(args) == 1:
+            self._display_line(1, args[0])  # default to line 1
+        elif len(args) == 2:
+            self._display_line(args[0], args[1])
+        else:
+            raise ValueError("display() takes 1 or 2 arguments (text or line + text)")
+
+    def _display_line(self, line, text):
         line_map = {1: LINE_1, 2: LINE_2, 3: LINE_3, 4: LINE_4}
         self._write(line_map.get(line, LINE_1), LCD_CMD)
         for char in text.ljust(LCD_WIDTH, " "):
@@ -42,7 +51,7 @@ class LCD:
         self.clear()
         lines = message.strip().split("\n")
         for i, text in enumerate(lines[:4]):
-            self.display(i+1, text.strip())
+            self._display_line(i+1, text.strip())
 
     def _write(self, bits, mode):
         high = mode | (bits & 0xF0) | 0x08

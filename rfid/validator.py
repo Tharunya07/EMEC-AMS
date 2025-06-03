@@ -1,58 +1,47 @@
 # rfid/validator.py
 
 import time
-import db.local_db as local_db
+import logging
+from db.local_db import LocalDB
+from db.azure_sync import sync_local_from_azure, push_access_requests
 from lcd.lcd import LCD
-from rfid.reader import RFIDReader
-from db.azure_sync import AzureConnection
-from config.constants import LCD_MESSAGES
+from config.constants import MACHINE_ID
+from relay.controller import RelayController
+from utils.startup_check import startup_sequence
 
-class Validator:
-    def __init__(self, lcd: LCD, reader: RFIDReader, azure: AzureConnection, machine_id: str):
-        self.lcd = lcd
-        self.reader = reader
-        self.azure = azure
-        self.machine_id = machine_id
+logger = logging.getLogger("validator")
+lcd = LCD()
+relay = RelayController()
+db = LocalDB()
 
-    def scan_card(self):
-        return self.reader.read_card()
+def validate_card(csu_id):
+    logger.info(f"[VALIDATOR] Card scanned: {csu_id}")
+    user = db.get_user(csu_id)
 
-    def is_recent_session(self, csu_id):
-        session = local_db.get_latest_session(csu_id, self.machine_id)
-        if not session:
-            return False
-        end_time = session.get('end_time')
-        if not end_time:
-            return False
-        elapsed = (time.time() - end_time.timestamp())
-        return elapsed <= 300
+    # CASE 1: Unknown or unauthorized user
+    if not user or not db.has_permission(csu_id, MACHINE_ID):
+        if db.access_request_exists(csu_id, MACHINE_ID):
+            lcd.display(1, "Already sent")
+            lcd.display(2, "Please wait")
+            logger.info(f"[ACCESS] Request already exists for {csu_id}")
+        else:
+            db.insert_access_request(csu_id, MACHINE_ID)
+            push_access_requests()  # sync immediately to Azure
+            lcd.display(1, "Request sent")
+            lcd.display(2, "Please wait")
+            logger.info(f"[ACCESS] Request raised for {csu_id}")
+        time.sleep(2)
 
-    def validate(self, uid, csu_id):
-        user = local_db.get_user_by_uid(uid)
-        if not user:
-            local_db.create_access_request(uid, csu_id, self.machine_id)
-            self.lcd.show_message("\n".join(LCD_MESSAGES["unknown_user"]))
-            return "DENY"
+        # After request sync, re-sync system data
+        startup_sequence()
+        return None, None
 
-        if local_db.check_permission(csu_id, self.machine_id):
-            return "ALLOW"
-
-        request = local_db.get_access_request(csu_id, self.machine_id)
-        if request:
-            status = request['status']
-            if status == "under_review":
-                self.lcd.show_message("\n".join(LCD_MESSAGES["request_pending"]))
-            elif status == "rejected":
-                self.lcd.show_message("\n".join(LCD_MESSAGES["request_denied"]))
-            return "DENY"
-
-        local_db.create_access_request(uid, csu_id, self.machine_id)
-        self.lcd.show_message("\n".join(LCD_MESSAGES["request_sent"]))
-        return "DENY"
-
-    def try_resume_session(self, uid, csu_id):
-        if self.is_recent_session(csu_id):
-            self.lcd.show_message("Continuing session")
-            time.sleep(2)
-            return True
-        return False
+    # CASE 2: Valid user with permission
+    display_name = user.get("name") or csu_id
+    lcd.display(1, f"{display_name} in use")
+    logger.info(f"[ACCESS] Granted to {csu_id} - {display_name}")
+    db.mark_user_active(csu_id)
+    db.update_machine_status(MACHINE_ID, "in_use")
+    db.update_machine_heartbeat(MACHINE_ID)
+    relay.turn_on()
+    return csu_id, display_name

@@ -1,71 +1,136 @@
 # relay/session_manager.py
 
-import RPi.GPIO as GPIO
 import time
 import uuid
-import signal
-import atexit
-from datetime import datetime
-import db.local_db as local_db
+import logging
+import RPi.GPIO as GPIO
 from lcd.lcd import LCD
-from db.azure_sync import AzureConnection
-from config.constants import STATUS_NEUTRAL, STATUS_OFFLINE
+from config.constants import RELAY_PIN, MACHINE_ID, CARD_GRACE_PERIOD_DEFAULT
+from db.local_db import LocalDB
+from db.azure_sync import sync_session_to_azure, push_user_status, push_machine_status
+from relay.controller import RelayController
+
+logger = logging.getLogger("session")
+log_file = logging.FileHandler("logs/sync.log")
+logger.setLevel(logging.INFO)
+logger.addHandler(log_file)
 
 class SessionManager:
-    def __init__(self, lcd: LCD, azure: AzureConnection, machine_id: str, pin: int):
-        self.lcd = lcd
-        self.azure = azure
-        self.machine_id = machine_id
-        self.pin = pin
-        self.session_id = None
-        self.csu_id = None
-        self.running = False
+    def __init__(self):
+        self.db = LocalDB()
+        self.lcd = LCD()
+        self.relay = RelayController()
+        self.active_session_id = None
+        self.active_csu_id = None
+        self.session_start_time = None
+        self.display_name = None
 
+        GPIO.setwarnings(False)
         GPIO.setmode(GPIO.BOARD)
-        GPIO.setup(self.pin, GPIO.OUT)
-        GPIO.output(self.pin, GPIO.LOW)
+        GPIO.setup(RELAY_PIN, GPIO.OUT)
+        GPIO.output(RELAY_PIN, GPIO.LOW)
 
-        atexit.register(self.cleanup)
-        signal.signal(signal.SIGINT, self.signal_handler)
-        signal.signal(signal.SIGTERM, self.signal_handler)
+    def start_session(self, csu_id, display_name):
+        if not self.active_session_id:
+            self.active_session_id = str(uuid.uuid4())
+            self.session_start_time = time.time()
+            self.db.mark_user_active(csu_id)
+            self.db.insert_session(self.active_session_id, csu_id, MACHINE_ID)
+            logger.info(f"[SESSION] Started: {display_name} ({csu_id}), session_id: {self.active_session_id}")
+        else:
+            logger.info("[SESSION] Resumed session within grace period.")
 
-    def start_session(self, csu_id):
-        self.session_id = str(uuid.uuid4())
-        self.csu_id = csu_id
-        self.running = True
+        self.active_csu_id = csu_id
+        self.display_name = display_name
+        self.db.update_machine_status(MACHINE_ID, "in_use")
+        self.db.update_machine_heartbeat(MACHINE_ID)
+        push_user_status(csu_id)
+        push_machine_status(MACHINE_ID)
 
-        GPIO.output(self.pin, GPIO.HIGH)
+        self.relay.turn_on()
+        self.lcd.clear()
+        self.lcd.display(1, f"{display_name[:20]}")
+        self.lcd.display(2, "in use")
 
-    def stop_session(self, csu_id):
-        if not self.running:
+    def wait_for_card_removal(self, reader):
+        absence_start = None
+        while True:
+            scan = reader.read_card()
+            if scan:
+                uid, csu_id = scan
+                if csu_id == self.active_csu_id:
+                    absence_start = None
+                else:
+                    logger.info("[SESSION] New card detected mid-session.")
+                    self.lcd.clear()
+                    self.lcd.display(1, "New card detected")
+                    self.lcd.display(2, "Resetting...")
+                    time.sleep(2)
+                    self.force_end_session()
+                    break
+            else:
+                if absence_start is None:
+                    absence_start = time.time()
+                elif time.time() - absence_start >= 5:
+                    self.lcd.clear()
+                    self.lcd.display(1, "Card removed")
+                    break
+            time.sleep(0.5)
+
+    def handle_grace_period(self, reader):
+        grace_period = self.db.get_setting("grace_period_seconds", default=CARD_GRACE_PERIOD_DEFAULT)
+        end_time = time.time() + grace_period
+        while time.time() < end_time:
+            remaining = int(end_time - time.time())
+            self.lcd.display(2, f"{remaining}s to reinsert")
+
+            scan = reader.read_card()
+            if scan:
+                uid, csu_id = scan
+                if csu_id == self.active_csu_id:
+                    self.lcd.clear()
+                    self.lcd.display(1, "Continuing session")
+                    time.sleep(1)
+                    self.start_session(csu_id, self.display_name)
+                    return "resumed"
+                else:
+                    self.lcd.clear()
+                    self.lcd.display(1, "New card detected")
+                    self.lcd.display(2, "Resetting...")
+                    time.sleep(2)
+                    self.force_end_session()
+                    return "new_card"
+            time.sleep(1)
+
+        self.force_end_session()
+        logger.info("[SESSION] Ended after grace period.")
+        return "timeout"
+
+    def force_end_session(self):
+        if not self.active_session_id:
             return
 
-        end_time = datetime.now()
-        local_db.close_machine_usage_log(csu_id, self.machine_id, end_time)
-        local_db.update_user_active(csu_id, False)
-        local_db.update_machine_status(self.machine_id, STATUS_NEUTRAL)
-        local_db.update_machine_heartbeat(self.machine_id, end_time.strftime("%Y-%m-%d %H:%M:%S"))
+        end_time = time.time()
+        duration_sec = int(end_time - self.session_start_time)
+        duration_min = max(0, round(duration_sec / 60))
 
-        GPIO.output(self.pin, GPIO.LOW)
-        self.running = False
-        self.session_id = None
-        self.csu_id = None
+        self.db.end_session(self.active_session_id)
+        self.db.mark_user_inactive(self.active_csu_id)
+        self.db.update_machine_status(MACHINE_ID, "neutral")
+        self.db.update_machine_heartbeat(MACHINE_ID)
 
-    def cleanup(self):
-        print("[RELAY] Cleanup triggered")
-        GPIO.output(self.pin, GPIO.LOW)
-        GPIO.cleanup()
+        push_user_status(self.active_csu_id)
+        push_machine_status(MACHINE_ID)
 
-    def signal_handler(self, signum, frame):
-        self.cleanup()
-        print("[RELAY] OFF")
-        exit(0)
+        sync_session_to_azure(self.active_session_id)
+        logger.info(f"[SESSION] Ended: {self.display_name} ({self.active_csu_id}), duration: {duration_min} min")
 
-    def get_device_id(self):
-        try:
-            with open("/proc/cpuinfo", "r") as f:
-                for line in f:
-                    if line.startswith("Serial"):
-                        return line.strip().split(":")[1].strip()
-        except:
-            return "UNKNOWN"
+        self.lcd.clear()
+        self.lcd.display(1, "Session ended")
+        time.sleep(1)
+
+        self.active_session_id = None
+        self.active_csu_id = None
+        self.session_start_time = None
+        self.display_name = None
+        self.relay.turn_off()
