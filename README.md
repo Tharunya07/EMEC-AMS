@@ -58,7 +58,7 @@ The system authenticates users through RFID cards, grants or denies access, logs
 
 | Initial Wiring | Inside View | Prototype Assembly |
 |----------------|-------------|--------------------|
-| ![Initial Wiring](images/Initial_wiring.jpeg) | ![Prototype Inside](images/Prototype1_inside.jpeg) | ![Prototype 1](images/prototype1.jpeg) |
+| ![Initial Wiring](images/Initial_wiring.jpeg) | ![Prototype Inside](images/Prototype1_inside.jpeg) | ![Prototype 1](images/protoype1.jpeg) |
 
 | Second Prototype | Final Setup | System in Action |
 |------------------|--------------|------------------|
