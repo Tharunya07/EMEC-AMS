@@ -1,4 +1,10 @@
 # rfid/reader.py
+"""
+File: reader.py
+Description:
+  Handles all RFID card reading operations.
+  Detects card presence, extracts UID, and communicates results to the validator for access control decisions.
+"""
 
 from mfrc522 import MFRC522
 import RPi.GPIO as GPIO

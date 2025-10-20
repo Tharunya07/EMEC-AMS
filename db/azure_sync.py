@@ -1,4 +1,10 @@
 # db/azure_sync.py
+"""
+File: azure_sync.py
+Description:
+  Synchronizes data between the local SQLite database and the Azure MySQL cloud database.
+  Includes functions to pull updates from Azure to local and push local changes to Azure.
+"""
 
 import pymysql
 import sqlite3
@@ -8,11 +14,6 @@ from config.constants import AZURE_ENV_KEYS, LOCAL_DB_PATH
 from db.local_db import LocalDB
 
 logger = logging.getLogger("azure_sync")
-logger.setLevel(logging.INFO)
-log_path = "logs/sync.log"
-os.makedirs("logs", exist_ok=True)
-file_handler = logging.FileHandler(log_path)
-logger.addHandler(file_handler)
 
 def get_azure_connection():
     return pymysql.connect(
@@ -20,7 +21,8 @@ def get_azure_connection():
         user=AZURE_ENV_KEYS["user"],
         password=AZURE_ENV_KEYS["password"],
         db=AZURE_ENV_KEYS["database"],
-        ssl={"ca": AZURE_ENV_KEYS["ssl_ca"]}
+        ssl={"ca": AZURE_ENV_KEYS["ssl_ca"]},
+        cursorclass=pymysql.cursors.DictCursor
     )
 
 def sync_local_from_azure():
@@ -28,9 +30,9 @@ def sync_local_from_azure():
     cursor_local = conn_local.cursor()
 
     conn_azure = get_azure_connection()
-    cursor_azure = conn_azure.cursor(pymysql.cursors.DictCursor)
+    cursor_azure = conn_azure.cursor()
 
-    tables = ['users', 'access_requests', 'machine_permissions', 'system_settings', 'machine']
+    tables = ['Users', 'User_Access','Access_Levels', 'Access_Requests', 'Machine_Permissions', 'System_Settings', 'Machine']
 
     for table in tables:
         try:
@@ -56,22 +58,21 @@ def sync_session_to_azure(session_id):
     try:
         conn_local = sqlite3.connect(LOCAL_DB_PATH)
         cur = conn_local.cursor()
-        cur.execute("SELECT * FROM machine_usage WHERE session_id = ?", (session_id,))
+        cur.execute("SELECT session_id, csu_id, machine_id, machine_type, start_time, end_time, duration FROM Machine_Usage WHERE session_id = ?", (session_id,))
         row = cur.fetchone()
         if not row:
             return
-        values = tuple(row)
 
         conn_azure = get_azure_connection()
         cursor_az = conn_azure.cursor()
         cursor_az.execute(
-            "REPLACE INTO machine_usage (session_id, csu_id, machine_id, machine_type, start_time, end_time, duration) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-            values
+            "REPLACE INTO Machine_Usage (session_id, csu_id, machine_id, machine_type, start_time, end_time, duration) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            row
         )
         conn_azure.commit()
         conn_azure.close()
 
-        cur.execute("DELETE FROM machine_usage WHERE session_id = ?", (session_id,))
+        cur.execute("DELETE FROM Machine_Usage WHERE session_id = ?", (session_id,))
         conn_local.commit()
         conn_local.close()
         logger.info(f"[SYNC] Session {session_id} synced and removed locally.")
@@ -88,10 +89,30 @@ def push_machine_status(machine_id):
     try:
         conn = get_azure_connection()
         cur = conn.cursor()
+
         cur.execute(
-            "UPDATE machine SET device_id=%s, machine_status=%s, last_heartbeat=%s WHERE machine_id=%s",
-            (machine["device_id"], machine["machine_status"], machine["last_heartbeat"], machine_id)
+            """
+            INSERT INTO Machine (machine_id, machine_name, machine_type, device_ip, machine_status, last_heartbeat, device_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                machine_name=VALUES(machine_name),
+                machine_type=VALUES(machine_type),
+                device_ip=VALUES(device_ip),
+                machine_status=VALUES(machine_status),
+                last_heartbeat=VALUES(last_heartbeat),
+                device_id=VALUES(device_id)
+            """,
+            (
+                machine["machine_id"],
+                machine["machine_name"],
+                machine["machine_type"],
+                machine["device_ip"] if "device_ip" in machine.keys() else None,
+                machine["machine_status"],
+                machine["last_heartbeat"],
+                machine["device_id"] if "device_id" in machine.keys() else None
+            )
         )
+
         conn.commit()
         conn.close()
         logger.info(f"[SYNC] Machine status pushed for {machine_id}")
@@ -109,7 +130,7 @@ def push_user_status(csu_id):
         conn = get_azure_connection()
         cur = conn.cursor()
         cur.execute(
-            "UPDATE users SET is_active=%s, last_used=%s WHERE csu_id=%s",
+            "UPDATE Users SET is_active=%s, last_used=%s WHERE csu_id=%s",
             (user["is_active"], user["last_used"], csu_id)
         )
         conn.commit()
@@ -118,12 +139,43 @@ def push_user_status(csu_id):
     except Exception as e:
         logger.error(f"[SYNC] User status push failed: {e}")
 
+def push_user_update(csu_id):
+    try:
+        conn_local = sqlite3.connect(LOCAL_DB_PATH)
+        conn_local.row_factory = sqlite3.Row
+        cur = conn_local.cursor()
+        cur.execute("SELECT csu_id, uid, name, last_used, is_active FROM Users WHERE csu_id = ?", (csu_id,))
+        row = cur.fetchone()
+        conn_local.close()
+
+        if not row:
+            logger.warning(f"[SYNC] No local user found with CSU ID {csu_id}")
+            return
+
+        conn = get_azure_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE Users SET uid = %s, name = %s, last_used = %s, is_active = %s
+            WHERE csu_id = %s
+        """, (
+            row["uid"],
+            row["name"],
+            row["last_used"],
+            row["is_active"],
+            row["csu_id"]
+        ))
+        conn.commit()
+        conn.close()
+        logger.info(f"[SYNC] UID and info pushed for {csu_id}")
+    except Exception as e:
+        logger.error(f"[SYNC] Failed to push user update for {csu_id}: {e}")
+
 def push_access_requests():
     try:
         conn_local = sqlite3.connect(LOCAL_DB_PATH)
-        cursor = conn_local.cursor()
-        cursor.execute("SELECT * FROM access_requests WHERE status = 'under_review'")
-        requests = cursor.fetchall()
+        cur = conn_local.cursor()
+        cur.execute("SELECT request_id, uid, csu_id, machine_id, machine_type, requested_on, status, reviewed_by, reviewed_at FROM Access_Requests WHERE status = 'under review'")
+        requests = cur.fetchall()
         if not requests:
             return
 
@@ -131,20 +183,21 @@ def push_access_requests():
         cur_az = conn_azure.cursor()
 
         for row in requests:
-            cur_az.execute(
-                """
-                INSERT INTO access_requests (request_id, uid, csu_id, machine_id, machine_type, requested_on, status, reviewed_by, reviewed_at)
+            cur_az.execute("""
+                INSERT INTO Access_Requests (request_id, uid, csu_id, machine_id, machine_type, requested_on, status, reviewed_by, reviewed_at)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
-                uid=VALUES(uid), machine_id=VALUES(machine_id), machine_type=VALUES(machine_type),
-                requested_on=VALUES(requested_on), status=VALUES(status), reviewed_by=VALUES(reviewed_by), reviewed_at=VALUES(reviewed_at)
-                """,
-                row
-            )
+                uid=VALUES(uid),
+                machine_id=VALUES(machine_id),
+                machine_type=VALUES(machine_type),
+                requested_on=VALUES(requested_on),
+                status=VALUES(status),
+                reviewed_by=VALUES(reviewed_by),
+                reviewed_at=VALUES(reviewed_at)
+            """, row)
 
         conn_azure.commit()
         conn_azure.close()
         logger.info(f"[SYNC] Access requests synced to Azure")
     except Exception as e:
         logger.error(f"[SYNC] Access request sync failed: {e}")
-

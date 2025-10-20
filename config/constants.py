@@ -1,9 +1,16 @@
 # config/constants.py
+"""
+File: constants.py
+Description:
+  Central configuration file that loads machine metadata, environment variables,
+  and default hardware constants used across the EMEC Access Management System.
+"""
 
 from dotenv import load_dotenv
 load_dotenv()
 import os
 import json
+
 # === Device ID (CPU Serial) ===
 def get_cpu_serial():
     try:
@@ -16,16 +23,21 @@ def get_cpu_serial():
 
 DEVICE_ID = get_cpu_serial()
 
-# === Machine ID from config.json ===
-def get_machine_id():
+# === Load Config from JSON ===
+def load_machine_config():
     try:
         with open("config/config.json", "r") as f:
             data = json.load(f)
-            return data.get("machine_id", "UNKNOWN")
+            return (
+                data.get("machine_id", "UNKNOWN"),
+                data.get("machine_name", "Unnamed Machine"),
+                data.get("machine_type", "Unknown Type")
+            )
     except:
-        return "UNKNOWN"
+        return ("UNKNOWN", "Unnamed Machine", "Unknown Type")
 
-MACHINE_ID = get_machine_id()
+MACHINE_ID, MACHINE_NAME, MACHINE_TYPE = load_machine_config()
+
 
 # === Relay and Card Constants ===
 RELAY_PIN = 11
@@ -52,22 +64,17 @@ REQUIRED_SYSTEM_SETTINGS = [
 STATUS_MAINTENANCE = "maintenance"
 STATUS_OFFLINE = "offline"
 STATUS_NEUTRAL = "neutral"
-STATUS_IN_USE = "in_use"
+STATUS_IN_USE = "in use"
 
 # === LCD Messages ===
 LCD_MESSAGES = {
-    "start": ["All clear.", "Welcome to EMEC!", "Scan your CSU ID to start"],
-    "maintenance": ["Machine out of order"],
-    "internet_error": ["No Internet Connection"],
-    "azure_error": ["Azure DB Unreachable"],
-    "sync_error": ["Sync failed", "Check connection"]
+    "start": ["All Clear.", "Welcome to EMEC!"],
+    "startup_next": ["Scan CSU ID", "to start"],
+    "maintenance": [f"{MACHINE_NAME}", "Out of order"],
+    "internet_error": ["No Internet", "Connection"],
+    "azure_error": ["Azure Error", "Check conn."],
+    "sync_error": ["Sync failed", "Check conn."]
 }
 
-LCD_SCAN_PROMPT = "Scan your CSU ID"
-LCD_SESSION_CONTINUE = "Continue session"
-LCD_CARD_REMOVED = "Card removed"
-LCD_GRACE_WAIT = "{}s to reinsert"
-LCD_NEW_CARD = "New card detected"
-LCD_RESETTING = "Resetting, wait"
-LCD_SESSION_ENDED = "Session ended"
-LCD_WELCOME = "Welcome to EMEC!"
+
+

@@ -1,4 +1,5 @@
 {
-    "machine_id": "lathe-001"
-  }
-  
+  "machine_id": "example-machine-id",
+  "machine_name": "Example Machine",
+  "machine_type": "Lathe"
+}

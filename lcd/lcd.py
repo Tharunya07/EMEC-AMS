@@ -1,69 +1,42 @@
 # lcd/lcd.py
+"""
+File: lcd.py
+Description:
+  Provides functions to control the 16x2 LCD display connected to the Raspberry Pi.
+  Handles message display, text formatting, and system status updates for the EMEC AMS interface.
+"""
 
-import smbus2 as smbus
-import time
-
-I2C_ADDR = 0x27
-LCD_WIDTH = 20
-LCD_CHR = 1
-LCD_CMD = 0
-LINE_1 = 0x80
-LINE_2 = 0xC0
-LINE_3 = 0x94
-LINE_4 = 0xD4
-E_PULSE = 0.0005
-E_DELAY = 0.0005
+from lcd.RGB1602 import RGB1602
 
 class LCD:
     def __init__(self):
-        self.bus = smbus.SMBus(1)
-        self.addr = I2C_ADDR
-        self._init_lcd()
+        self.lcd = RGB1602(16, 2)
 
-    def _init_lcd(self):
-        self._write(0x33, LCD_CMD)
-        self._write(0x32, LCD_CMD)
-        self._write(0x06, LCD_CMD)
-        self._write(0x0C, LCD_CMD)
-        self._write(0x28, LCD_CMD)
-        self.clear()
+    def display(self, line1="", line2="", color="white"):
+        if isinstance(line1, str) and '\n' in line1:
+            parts = line1.split('\n')
+            line1 = parts[0]
+            line2 = parts[1] if len(parts) > 1 else ""
+
+        color_map = {
+            "green": (0, 255, 0),
+            "red": (255, 0, 0),
+            "yellow": (255, 100, 0),
+            "gray": (80, 80, 80),
+            "white": (255, 255, 255)
+        }
+
+        rgb = color_map.get(color, (255, 255, 255))
+        self.lcd.setRGB(*rgb)
+
+        self.lcd.clear()
+        self.lcd.setCursor(0, 0)
+        self.lcd.printout(str(line1)[:16])
+        self.lcd.setCursor(0, 1)
+        self.lcd.printout(str(line2)[:16])
 
     def clear(self):
-        self._write(0x01, LCD_CMD)
-        time.sleep(E_DELAY)
+        self.lcd.clear()
 
-    # ? single-line message defaults to line 1
-    def display(self, *args):
-        if len(args) == 1:
-            self._display_line(1, args[0])  # default to line 1
-        elif len(args) == 2:
-            self._display_line(args[0], args[1])
-        else:
-            raise ValueError("display() takes 1 or 2 arguments (text or line + text)")
-
-    def _display_line(self, line, text):
-        line_map = {1: LINE_1, 2: LINE_2, 3: LINE_3, 4: LINE_4}
-        self._write(line_map.get(line, LINE_1), LCD_CMD)
-        for char in text.ljust(LCD_WIDTH, " "):
-            self._write(ord(char), LCD_CHR)
-
-    def show_message(self, message):
-        self.clear()
-        lines = message.strip().split("\n")
-        for i, text in enumerate(lines[:4]):
-            self._display_line(i+1, text.strip())
-
-    def _write(self, bits, mode):
-        high = mode | (bits & 0xF0) | 0x08
-        low = mode | ((bits << 4) & 0xF0) | 0x08
-        self.bus.write_byte(self.addr, high)
-        self._toggle_enable(high)
-        self.bus.write_byte(self.addr, low)
-        self._toggle_enable(low)
-
-    def _toggle_enable(self, bits):
-        time.sleep(E_DELAY)
-        self.bus.write_byte(self.addr, bits | 0x04)
-        time.sleep(E_PULSE)
-        self.bus.write_byte(self.addr, bits & ~0x04)
-        time.sleep(E_DELAY)
+    def set_color(self, r, g, b):
+        self.lcd.setRGB(r, g, b)

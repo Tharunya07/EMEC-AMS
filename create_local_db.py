@@ -1,4 +1,10 @@
 # create_local_db.py
+"""
+File: create_local_db.py
+Description:
+  Creates and initializes the local SQLite database used by EMEC Access Management System.
+  Contains schema definitions for users, access levels, machines, permissions, and usage logs.
+"""
 
 import sqlite3
 import os
@@ -6,64 +12,79 @@ import os
 DB_PATH = "data/local.db"
 os.makedirs("data", exist_ok=True)
 
+# Database Schema
+
 schema = """
 -- USERS
-CREATE TABLE IF NOT EXISTS users (
+CREATE TABLE IF NOT EXISTS Users (
     csu_id TEXT PRIMARY KEY,
     uid TEXT,
     name TEXT,
-    email TEXT,
-    is_active INTEGER DEFAULT 0,
     last_used TEXT,
-    access_level TEXT,
-    group_name TEXT
+    is_active INTEGER DEFAULT 0
+);
+
+-- USER ACCESS 
+CREATE TABLE IF NOT EXISTS User_Access (
+    csu_id TEXT,
+    level_name TEXT,
+    added_at TEXT,
+    PRIMARY KEY (csu_id, level_name)
+);
+
+-- ACCESS LEVELS
+CREATE TABLE IF NOT EXISTS Access_Levels (
+    level_name TEXT PRIMARY KEY
+);
+
+-- USER GROUPS
+CREATE TABLE IF NOT EXISTS User_Groups (
+    csu_id TEXT,
+    group_name TEXT,
+    added_at TEXT,
+    PRIMARY KEY (csu_id, group_name)
+);
+
+-- MACHINE
+CREATE TABLE IF NOT EXISTS Machine (
+    machine_id TEXT PRIMARY KEY,
+    machine_type TEXT,
+    machine_name TEXT,
+    machine_status TEXT DEFAULT 'offline',
+    device_ip TEXT,
+    last_heartbeat TEXT,
+    device_id TEXT
+);
+
+-- MACHINE PERMISSIONS
+CREATE TABLE IF NOT EXISTS Machine_Permissions (
+    csu_id TEXT,
+    machine_id TEXT,
+    machine_type TEXT,
+    permission_status TEXT,
+    permission_mode TEXT,
+    modified_by TEXT,
+    modified_at TEXT,
+    PRIMARY KEY (csu_id, machine_id)
 );
 
 -- ACCESS REQUESTS
-CREATE TABLE IF NOT EXISTS access_requests (
+CREATE TABLE IF NOT EXISTS Access_Requests (
     request_id INTEGER PRIMARY KEY AUTOINCREMENT,
     uid TEXT,
     csu_id TEXT,
     machine_id TEXT,
     machine_type TEXT,
-    requested_on TEXT DEFAULT (datetime('now')),
-    status TEXT DEFAULT 'under_review',
+    requested_on TEXT,
+    status TEXT DEFAULT 'under review',
     reviewed_by TEXT,
     reviewed_at TEXT
 );
 
--- MACHINE PERMISSIONS
-CREATE TABLE IF NOT EXISTS machine_permissions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    csu_id TEXT,
-    uid TEXT,
-    machine_id TEXT,
-    machine_type TEXT,
-    access TEXT,
-    granted_by TEXT,
-    granted_at TEXT
-);
-
--- MACHINE
-CREATE TABLE IF NOT EXISTS machine (
-    machine_id TEXT PRIMARY KEY,
-    machine_name TEXT,
-    machine_type TEXT,
-    machine_status TEXT DEFAULT 'offline',
-    device_id TEXT,
-    last_heartbeat TEXT
-);
-
--- SYSTEM SETTINGS
-CREATE TABLE IF NOT EXISTS system_settings (
-    key TEXT PRIMARY KEY,
-    value TEXT,
-    description TEXT
-);
-
 -- MACHINE USAGE
-CREATE TABLE IF NOT EXISTS machine_usage (
-    session_id TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS Machine_Usage (
+    log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT,
     csu_id TEXT,
     machine_id TEXT,
     machine_type TEXT,
@@ -71,15 +92,20 @@ CREATE TABLE IF NOT EXISTS machine_usage (
     end_time TEXT,
     duration INTEGER
 );
+
+-- SYSTEM SETTINGS
+CREATE TABLE IF NOT EXISTS System_Settings (
+    setting TEXT PRIMARY KEY,
+    value TEXT,
+    description TEXT,
+    last_updated TEXT
+);
 """
 
-def create_db():
+def create_local_db():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.executescript(schema)
     conn.commit()
     conn.close()
     print(f"Local DB created at {DB_PATH}")
-
-if __name__ == "__main__":
-    create_db()
